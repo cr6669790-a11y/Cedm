@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Neon Slope Runner</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #090d16;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+      touch-action: none;
+    }
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      max-width: 500px;
+      padding: 10px 18px;
+      background: #0f172a;
+      border-radius: 12px 12px 0 0;
+      border: 1px solid #1e293b;
+      border-bottom: none;
+    }
+    .stat-label { font-size: 10px; text-transform: uppercase; color: #94a3b8; }
+    .stat-val { font-size: 18px; font-weight: 700; color: #38bdf8; font-variant-numeric: tabular-nums; }
+    .canvas-box {
+      position: relative;
+      width: 100%;
+      max-width: 500px;
+      height: 480px;
+      background: #020617;
+      border: 1px solid #1e293b;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    .overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.9);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 24px;
+      text-align: center;
+      backdrop-filter: blur(4px);
+    }
+    .overlay.hidden { display: none; }
+    .overlay h2 { font-size: 26px; font-weight: 800; }
+    .overlay p { font-size: 14px; color: #94a3b8; max-width: 320px; line-height: 1.4; }
+    .btn {
+      background: #0284c7;
+      color: white;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .hint {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="hud">
+    <div>
+      <div class="stat-label">Distance</div>
+      <div class="stat-val" id="score">0m</div>
+    </div>
+    <div>
+      <div class="stat-label">Speed</div>
+      <div class="stat-val" id="speed">1.0x</div>
+    </div>
+    <div>
+      <div class="stat-label">Best Record</div>
+      <div class="stat-val" id="highScore">0m</div>
+    </div>
+  </div>
+
+  <div class="canvas-box">
+    <canvas id="gameCanvas" width="500" height="480"></canvas>
+    <div id="overlay" class="overlay">
+      <h2 id="overlayTitle">Neon Slope Runner</h2>
+      <p id="overlayDesc">Steer the high-speed cyber orb down the endless neon grid slope. Avoid red barriers and falls!</p>
+      <button class="btn" id="startBtn">Roll Down</button>
+    </div>
+  </div>
+
+  <div class="hint">Controls: A / D or Left / Right Arrows to Steer · Space to Jump</div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const speedEl = document.getElementById('speed');
+    const highScoreEl = document.getElementById('highScore');
+    const overlay = document.getElementById('overlay');
+    const overlayTitle = document.getElementById('overlayTitle');
+    const overlayDesc = document.getElementById('overlayDesc');
+    const startBtn = document.getElementById('startBtn');
+
+    let highScore = parseInt(localStorage.getItem('slope_high') || '0', 10);
+    highScoreEl.textContent = highScore + 'm';
+
+    let isPlaying = false;
+    let distance = 0;
+    let speed = 4;
+    let ballX = 0; // -1 to 1 normalized
+    let ballY = 0; // jump height
+    let ballVy = 0;
+    let isJumping = false;
+    let steerDir = 0;
+
+    let obstacles = [];
+    let segments = [];
+    let particles = [];
+
+    // Keys
+    const keys = {};
+    window.addEventListener('keydown', (e) => {
+      keys[e.key] = true;
+      if (e.key === ' ' && !isJumping && isPlaying) {
+        ballVy = 8;
+        isJumping = true;
+        e.preventDefault();
+      }
+    });
+    window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+    // Touch / mouse steering
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isPlaying) return;
+      const rect = canvas.getBoundingClientRect();
+      const relX = (e.clientX - rect.left) / rect.width;
+      ballX = (relX - 0.5) * 2.2;
+    });
+
+    canvas.addEventListener('touchmove', (e) => {
+      if (!isPlaying) return;
+      const rect = canvas.getBoundingClientRect();
+      const relX = (e.touches[0].clientX - rect.left) / rect.width;
+      ballX = (relX - 0.5) * 2.2;
+      e.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener('touchstart', (e) => {
+      if (isPlaying && !isJumping) {
+        ballVy = 8;
+        isJumping = true;
+      }
+    });
+
+    function initGame() {
+      distance = 0;
+      speed = 5;
+      ballX = 0;
+      ballY = 0;
+      ballVy = 0;
+      isJumping = false;
+      obstacles = [];
+      particles = [];
+      scoreEl.textContent = '0m';
+      speedEl.textContent = '1.0x';
+      isPlaying = true;
+      overlay.classList.add('hidden');
+
+      // Seed initial obstacles
+      for (let i = 0; i < 6; i++) {
+        spawnObstacle(400 + i * 180);
+      }
+    }
+
+    function spawnObstacle(zDistance) {
+      obstacles.push({
+        lane: (Math.random() - 0.5) * 1.6, // -0.8 to 0.8
+        width: 0.5,
+        z: zDistance,
+        color: '#ef4444'
+      });
+    }
+
+    function update() {
+      if (!isPlaying) return;
+
+      if (keys['ArrowLeft'] || keys['a'] || keys['A']) {
+        ballX = Math.max(-1.1, ballX - 0.05);
+      }
+      if (keys['ArrowRight'] || keys['d'] || keys['D']) {
+        ballX = Math.min(1.1, ballX + 0.05);
+      }
+
+      // Ball jump
+      if (isJumping) {
+        ballY += ballVy;
+        ballVy -= 0.6;
+        if (ballY <= 0) {
+          ballY = 0;
+          ballVy = 0;
+          isJumping = false;
+        }
+      }
+
+      distance += Math.round(speed / 4);
+      scoreEl.textContent = distance + 'm';
+      speed = 5 + Math.min(10, distance / 300);
+      speedEl.textContent = (speed / 5).toFixed(1) + 'x';
+
+      if (distance > highScore) {
+        highScore = distance;
+        highScoreEl.textContent = highScore + 'm';
+        localStorage.setItem('slope_high', highScore);
+      }
+
+      // Fall off edge check
+      if (Math.abs(ballX) > 1.25) {
+        gameOver('Fell off the cyber highway!');
+        return;
+      }
+
+      // Update obstacles
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+        obs.z -= speed * 2;
+
+        // Collision check at horizon cross (z ~ 50)
+        if (obs.z < 65 && obs.z > 35) {
+          if (ballY < 18) { // didn't jump over
+            const hit = Math.abs(ballX - obs.lane);
+            if (hit < 0.35) {
+              gameOver('Impact with security barrier!');
+              return;
+            }
+          }
+        }
+
+        if (obs.z < 20) {
+          obstacles.splice(i, 1);
+          spawnObstacle(1100 + Math.random() * 200);
+        }
+      }
+    }
+
+    function gameOver(reason) {
+      isPlaying = false;
+      overlayTitle.textContent = 'Crash Detected';
+      overlayDesc.textContent = `${reason} Distance: ${distance}m · Best: ${highScore}m`;
+      startBtn.textContent = 'Retry Slope';
+      overlay.classList.remove('hidden');
+    }
+
+    function draw() {
+      ctx.fillStyle = '#020617';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const horizonY = 160;
+      const originX = canvas.width / 2;
+
+      // Perspective slope ground
+      ctx.fillStyle = '#090d16';
+      ctx.beginPath();
+      ctx.moveTo(originX - 40, horizonY);
+      ctx.lineTo(originX + 40, horizonY);
+      ctx.lineTo(canvas.width + 40, canvas.height);
+      ctx.lineTo(-40, canvas.height);
+      ctx.closePath();
+      ctx.fill();
+
+      // Road border rails
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 3;
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.moveTo(originX - 40, horizonY);
+      ctx.lineTo(-40, canvas.height);
+      ctx.moveTo(originX + 40, horizonY);
+      ctx.lineTo(canvas.width + 40, canvas.height);
+      ctx.stroke();
+
+      // Center dash lane
+      ctx.strokeStyle = '#0284c7';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([15, 15]);
+      ctx.beginPath();
+      ctx.moveTo(originX, horizonY);
+      ctx.lineTo(originX, canvas.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.shadowBlur = 0;
+
+      // Horizontal grid lines moving forward
+      const gridOffset = (Date.now() * speed * 0.05) % 40;
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 10; i++) {
+        const yFrac = Math.pow((i * 40 + gridOffset) / 400, 2);
+        const y = horizonY + yFrac * (canvas.height - horizonY);
+        if (y >= horizonY && y <= canvas.height) {
+          const halfW = 40 + yFrac * (canvas.width / 2);
+          ctx.beginPath();
+          ctx.moveTo(originX - halfW, y);
+          ctx.lineTo(originX + halfW, y);
+          ctx.stroke();
+        }
+      }
+
+      // Draw Obstacles
+      obstacles.forEach(obs => {
+        if (obs.z <= 0) return;
+        const scale = 220 / (obs.z + 100);
+        const y = horizonY + (1 - scale * 0.6) * (canvas.height - horizonY);
+        const screenX = originX + obs.lane * (240 * scale);
+        const w = 48 * scale;
+        const h = 34 * scale;
+
+        ctx.fillStyle = obs.color;
+        ctx.shadowColor = obs.color;
+        ctx.shadowBlur = 10 * scale;
+        ctx.beginPath();
+        ctx.roundRect(screenX - w / 2, y - h, w, h, 4);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      });
+
+      // Player Ball
+      const playerY = canvas.height - 50 - ballY;
+      const playerX = originX + ballX * 160;
+
+      // Ball shadow
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+      ctx.beginPath();
+      ctx.ellipse(playerX, canvas.height - 48, 14 * (1 - ballY / 100), 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Glowing ball
+      ctx.fillStyle = '#38bdf8';
+      ctx.shadowColor = '#38bdf8';
+      ctx.shadowBlur = 14;
+      ctx.beginPath();
+      ctx.arc(playerX, playerY, 14, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner highlight
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(playerX - 4, playerY - 4, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    startBtn.addEventListener('click', initGame);
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>

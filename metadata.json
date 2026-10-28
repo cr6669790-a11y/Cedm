@@ -1,0 +1,6 @@
+{
+  "name": "Nexus Arcade - Unblocked Games Hub",
+  "description": "A clean, fast unblocked games portal with instant iframe playback, customizable JSON catalog, tab cloaking, and responsive controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
